@@ -92,14 +92,20 @@ let mode='masuk',pend=null,lastNew=null,pendDel=null;
 const nk=s=>s.trim().replace(/\s+/g,' ').toLowerCase();
 async function hp(s){try{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('kk|'+s));return 'h:'+[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}catch(e){return s}}
 function genPw(){const c='ABCDEFGHJKMNPQRSTUVWXYZ23456789',a=new Uint32Array(6);crypto.getRandomValues(a);return [...a].map(x=>c[x%c.length]).join('')}
+const KEY='3eb3117fe5dd0be655cf0a8991b9738b',PC='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+async function pwFor(name){const k=await crypto.subtle.importKey('raw',new TextEncoder().encode(KEY),{name:'HMAC',hash:'SHA-256'},false,['sign']);const g=new Uint8Array(await crypto.subtle.sign('HMAC',k,new TextEncoder().encode(nk(name))));return [...g.slice(0,6)].map(b=>PC[b%PC.length]).join('')}
+function idFor(name){let h=7;for(const c of nk(name))h=(h*31+c.charCodeAt(0))>>>0;return 1000000+h}
+const cap=s=>s.replace(/(^|\s)(\S)/g,(m,a,b)=>a+b.toUpperCase());
+let bl=load('bl',[]);
 let gone=load('gone',[]);
-const enc=()=>btoa(unescape(encodeURIComponent(JSON.stringify({v:1,emps,recs,gone}))));
+const enc=()=>btoa(unescape(encodeURIComponent(JSON.stringify({v:1,emps,recs,gone,bl}))));
 function merge(code){
  let d;try{d=JSON.parse(decodeURIComponent(escape(atob(code.trim()))))}catch(e){return toast('Kode data tidak valid')}
  if(!d||!Array.isArray(d.emps)||!Array.isArray(d.recs))return toast('Kode data tidak valid');
- gone=[...new Set([...gone,...(d.gone||[])])];
- const em=new Map();[...emps,...d.emps].forEach(e=>{if(!gone.includes(e.id)&&!em.has(e.id))em.set(e.id,e)});
- const rm=new Map();[...recs,...d.recs].forEach(x=>{if(gone.includes(x.emp))return;const k=x.emp+'|'+x.date,o=rm.get(k);if(!o||(x.out&&!o.out))rm.set(k,x)});
+ if(!IS_ADMIN){gone=d.gone||[];bl=d.bl||[];save('bl',bl)}
+ const em=new Map(),seen={},alias={};
+ [...emps,...d.emps].forEach(e=>{if(gone.includes(e.id)||em.has(e.id))return;const k=nk(e.name);if(seen[k]!==undefined){alias[e.id]=seen[k];return}seen[k]=e.id;em.set(e.id,e)});
+ const rm=new Map();[...recs,...d.recs].forEach(x=>{const id=alias[x.emp]??x.emp;if(gone.includes(id))return;const y={...x,emp:id},k=id+'|'+x.date,o=rm.get(k);if(!o||(y.out&&!o.out))rm.set(k,y)});
  emps=[...em.values()];recs=[...rm.values()];save('gone',gone);persist();
  toast('Data digabung: '+emps.length+' karyawan, '+recs.length+' catatan');
 }
@@ -115,26 +121,31 @@ const find=(id,d)=>recs.find(r=>r.emp==id&&r.date==d);
 const dur=r=>{if(!r.in||!r.out)return '-';let m=mins(r.out)-mins(r.in);if(m<0)m+=1440;return Math.floor(m/60)+'j '+m%60+'m'};
 let msgT;function toast(t){const e=$('toast');e.textContent=t;e.style.display='block';clearTimeout(msgT);msgT=setTimeout(()=>e.style.display='none',3200)}
 
-let me=null,admin=false,tab='dash',fm=ymd(new Date()).slice(0,7),fe='all',myM=fm;
+let me=null,admin=load('admin',0)==1,tab='dash',fm=ymd(new Date()).slice(0,7),fe='all',myM=fm;
 
 const IS_ADMIN=true;
 
 function loginAdmin(){
  $('app').innerHTML=`<div class="card login"><div class="logo"><i>☕</i>Kowa Kowo</div><h2 style="text-align:center">Masuk Admin</h2><p class="muted" style="text-align:center">Khusus pemilik atau manajer cafe.</p>
- <label>PIN Admin</label><input id="ap" type="password" inputmode="numeric" placeholder="••••" onkeydown="if(event.key=='Enter')doAdm()">
+ <label>PIN Admin</label><input id="ap" type="password" inputmode="numeric" onkeydown="if(event.key=='Enter')doAdm()">
  <div class="row"><button class="btn" onclick="doAdm()">Masuk</button></div></div>
  `;
 }
-async function doAdm(){if(await hp($('ap').value)===ADMIN_HASH){admin=true;render()}else toast('PIN salah')}
+async function doAdm(){if(await hp($('ap').value)===ADMIN_HASH){admin=true;save('admin',1);render()}else toast('PIN salah')}
 function vDash(){
  const d=bd(),t=recs.filter(r=>r.date==d),c=s=>t.filter(r=>r.status==s).length;
+ const n0=new Date(),nowM=n0.getHours()*60+n0.getMinutes(),on=t.filter(r=>r.in&&!r.out),
+ lama=r=>{let m=nowM-mins(r.in);if(m<0)m+=1440;return Math.floor(m/60)+'j '+m%60+'m'},
+ chip=(txt,cls)=>`<span class="tag ${cls}" style="display:inline-block;margin:0 6px 8px 0">${esc(txt)}</span>`,
+ work=on.length?`<div class="tw"><table><tr><th>Nama</th><th>Masuk</th><th>Sudah bekerja</th></tr>${on.map(r=>`<tr><td>${esc(emp(r.emp)?.name||'')}</td><td>${r.in}</td><td>${lama(r)}</td></tr>`).join('')}</table></div>`:'<p class="muted">Belum ada yang sedang bertugas.</p>',
+ off=emps.filter(e=>!find(e.id,d)),iz=t.filter(r=>r.status=='Izin'||r.status=='Sakit'),
+ belum=(off.length?off.map(e=>chip(e.name,'Belum')).join(''):'<p class="muted">Semua karyawan sudah absen 🎉</p>')+(iz.length?'<h3 style="margin:14px 0 8px">Izin / Sakit</h3>'+iz.map(r=>chip((emp(r.emp)?.name||'')+' · '+r.status,r.status)).join(''):'');
  $('app').innerHTML=`<h2>Dashboard</h2><p class="muted">${tgl(d)} · ${emps.length} karyawan terdaftar</p><br>
  <div class="grid g3"><div class="card stat"><span class="muted">Hadir</span><b style="color:var(--ok)">${c('Hadir')}</b></div>
  
  <div class="card stat"><span class="muted">Izin / Sakit</span><b>${c('Izin')+c('Sakit')}</b></div>
  <div class="card stat"><span class="muted">Belum Absen</span><b style="color:var(--bad)">${emps.length-t.length}</b></div></div>
- <div class="card"><h3>Detail Hari Ini</h3><div class="tw"><table><tr><th>Nama</th><th>Masuk</th><th>Pulang</th><th>Durasi</th><th>Status</th></tr>
- ${emps.map(e=>{const r=find(e.id,d)||{};return `<tr><td>${esc(e.name)}</td><td>${r.in||'-'}</td><td>${r.out||'-'}</td><td>${dur(r)}</td><td>${tag(r.status||'Belum')}</td></tr>`}).join('')}</table></div></div>`;
+ <div class="grid g2"><div class="card"><h3>🟢 Sedang Bertugas</h3>${work}</div><div class="card"><h3>⏳ Belum Absen Hari Ini</h3>${belum}</div></div>`;
 }
 function vRiwayat(){
  $('app').innerHTML=`<h2>Riwayat Absensi</h2><p class="muted">Pilih bulan dan karyawan, lalu unduh sebagai CSV.</p><br>
@@ -154,22 +165,23 @@ function csv(){const l=flt();if(!l.length)return toast('Tidak ada data');
 function vKary(){
  $('app').innerHTML=`<h2>Data Karyawan</h2><p class="muted">Tambah atau hapus karyawan dan atur shift kerja.</p><br>
  <div class="grid g2"><div class="card"><h3>Tambah Karyawan</h3>${lastNew?`<div class="help" style="margin:0 0 12px">Akun <b>${esc(lastNew.name)}</b> dibuat. Password: <b style="font:700 20px ui-monospace,Consolas,monospace;letter-spacing:3px">${lastNew.pw}</b><br>Catat sekarang, tidak akan tampil lagi.</div>`:''}<label>Nama Lengkap</label><input id="n">
- <p class="muted">Password acak dibuat otomatis oleh sistem dan bisa dilihat di daftar karyawan.</p>
+ <p class="muted">Password dibuat otomatis oleh sistem dari nama ini dan langsung bisa dipakai login di halaman absen karyawan.</p>
  <div class="row"><button class="btn" onclick="add()">+ Simpan</button></div></div>
  <div class="card"><h3>Daftar (${emps.length})</h3><div class="tw"><table><tr><th>Nama</th><th>Password</th><th></th></tr>
  ${emps.map(e=>`<tr><td>${esc(e.name)}</td><td>${e.pin.startsWith('h:')?'<button class="btn out sm" onclick="setPw(${e.id})">Buat password</button>':`<b style="font:700 15px ui-monospace,Consolas,monospace;letter-spacing:2px">${esc(e.pin)}</b>`}</td><td>${pendDel==e.id?`<span class="muted" style="margin-right:6px">Yakin? Riwayat absennya ikut terhapus.</span><button class="btn red sm" onclick="del(${e.id})">Ya, hapus</button> <button class="btn out sm" onclick="pendDel=null;vKary()">Batal</button>`:`<button class="btn red sm" onclick="pendDel=${e.id};vKary()">Hapus</button>`}</td></tr>`).join('')}</table></div></div></div>`}
 async function add(){const n=$('n').value.trim().replace(/\s+/g,' ');
  if(!n)return toast('Nama wajib diisi');
  if(emps.some(x=>nk(x.name)==nk(n)))return toast('Nama sudah dipakai');
- const pw=genPw();
- emps.push({id:Date.now(),name:n,pin:pw});persist();lastNew={name:n,pw};vKary();lastNew=null;toast('Karyawan ditambahkan')}
-function setPw(id){const e=emp(id);if(!e||!e.pin.startsWith('h:'))return;e.pin=genPw();persist();vKary();toast('Password dibuat untuk '+e.name.split(' ')[0]+'. Beri tahu orangnya ya')}
-function del(id){const e=emp(id);if(!e)return;gone.push(id);save('gone',gone);emps=emps.filter(x=>x.id!=id);recs=recs.filter(r=>r.emp!=id);pendDel=null;persist();toast(e.name+' sudah dihapus');vKary()}
+ const pw=await pwFor(n),id=idFor(n);
+ gone=gone.filter(g=>g!==id);bl=bl.filter(b=>b!==nk(n));save('gone',gone);save('bl',bl);
+ emps.push({id,name:cap(n),pin:pw});persist();lastNew={name:cap(n),pw};vKary();lastNew=null;toast('Karyawan ditambahkan. Password langsung bisa dipakai di halaman absen')}
 
+async function setPw(id){const e=emp(id);if(!e||!e.pin.startsWith('h:'))return;e.pin=await pwFor(e.name);persist();vKary();toast('Password dibuat untuk '+e.name.split(' ')[0]+'. Beri tahu orangnya ya')}
+function del(id){const e=emp(id);if(!e)return;gone.push(id);bl.push(nk(e.name));save('gone',gone);save('bl',bl);emps=emps.filter(x=>x.id!=id);recs=recs.filter(r=>r.emp!=id);pendDel=null;persist();toast(e.name+' dihapus. Supaya berlaku di halaman absen, salin kode di menu Sinkron');vKary()}
 function render(){
  $('sub').textContent='Panel Admin';
  if(!admin){$('nav').innerHTML='';return loginAdmin()}
- $('nav').innerHTML=[['dash','Dashboard'],['riwayat','Riwayat'],['kary','Karyawan'],['sync','Sinkron']].map(([k,l])=>`<button class="${tab==k?'on':''}" onclick="tab='${k}';render()">${l}</button>`).join('')+`<button onclick="admin=false;render()">Keluar</button>`;
+ $('nav').innerHTML=[['dash','Dashboard'],['riwayat','Riwayat'],['kary','Karyawan'],['sync','Sinkron']].map(([k,l])=>`<button class="${tab==k?'on':''}" onclick="tab='${k}';render()">${l}</button>`).join('')+`<button onclick="admin=false;save('admin',0);render()">Keluar</button>`;
  ({dash:vDash,riwayat:vRiwayat,kary:vKary,sync:syncUI})[tab]();
 }
 render();
